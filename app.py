@@ -15,46 +15,63 @@ def load_data():
         # Load the CSV
         df = pd.read_csv('ESP32 Data Log.csv')
         
-        # Clean column names (removes spaces/tabs we found earlier)
+        # Clean column names (removes hidden spaces/tabs)
         df.columns = df.columns.str.strip()
         
-        # Combine 'Date' and 'Time' into a single Timestamp column
-        # We use errors='coerce' to handle any messy data rows
-        df['Timestamp'] = pd.to_datetime(df['Date'] + ' ' + df['Time'], errors='coerce')
+        # CRITICAL FIX: Merge Date and Time using dayfirst=True for DD/MM/YYYY
+        df['Timestamp'] = pd.to_datetime(df['Date'] + ' ' + df['Time'], dayfirst=True, errors='coerce')
         
-        # Ensure Temperature and Humidity are treated as numbers
+        # FIX for potential cut-off header 'Temperat'
+        if 'Temperat' in df.columns:
+            df = df.rename(columns={'Temperat': 'Temperature'})
+            
+        # Ensure numbers are numeric
         df['Temperature'] = pd.to_numeric(df['Temperature'], errors='coerce')
         df['Humidity'] = pd.to_numeric(df['Humidity'], errors='coerce')
         
-        # Drop any rows that failed to convert (cleaning the data)
-        return df.dropna(subset=['Timestamp', 'Temperature', 'Humidity'])
-    except FileNotFoundError:
+        # Drop any rows where timestamp failed to convert
+        return df.dropna(subset=['Timestamp'])
+    except Exception as e:
+        st.error(f"Error reading CSV: {e}")
         return None
 
 df = load_data()
 
 # 3. App Logic
-if df is not None:
-    # --- SIDEBAR FILTERS ---
-    st.sidebar.header("Filter Settings")
+if df is not None and not df.empty:
+    # KPI Metrics for the latest reading
+    latest = df.iloc[-1]
     
-    # Date Range Filter
-    min_date = df['Timestamp'].min().date()
-    max_date = df['Timestamp'].max().date()
-    
-    date_range = st.sidebar.date_input(
-        "Select Date Range", 
-        [min_date, max_date],
-        min_value=min_date,
-        max_value=max_date
-    )
-    
-    # Filtering the data based on sidebar selection
-    if len(date_range) == 2:
-        start_date, end_date = date_range
-        mask = (df['Timestamp'].dt.date >= start_date) & (df['Timestamp'].dt.date <= end_date)
-        df_filtered = df.loc[mask]
-    else:
-        df_filtered = df
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Current Temp", f"{latest['Temperature']}°C")
+    col2.metric("Current Humidity", f"{latest['Humidity']}%")
+    col3.metric("Total Readings", len(df))
 
-    #
+    st.divider()
+
+    # Interactive Plotly Charts
+    col_left, col_right = st.columns(2)
+
+    with col_left:
+        fig_temp = px.line(df, x='Timestamp', y='Temperature', 
+                          title='Temperature Trend (°C)', 
+                          color_discrete_sequence=['#ef4444'])
+        st.plotly_chart(fig_temp, use_container_width=True)
+
+    with col_right:
+        fig_hum = px.line(df, x='Timestamp', y='Humidity', 
+                         title='Humidity Trend (%)', 
+                         color_discrete_sequence=['#3b82f6'])
+        st.plotly_chart(fig_hum, use_container_width=True)
+
+    # Statistical Summary
+    st.subheader("Statistical Summary")
+    st.dataframe(df[['Temperature', 'Humidity']].describe().T, use_container_width=True)
+
+    with st.expander("View Raw Data Log"):
+        st.dataframe(df.sort_values(by="Timestamp", ascending=False), use_container_width=True)
+
+elif df is not None and df.empty:
+    st.warning("The CSV was found, but no valid data could be processed. Check your Date/Time formats.")
+else:
+    st.error("⚠️ File 'ESP32 Data Log.csv' not found. Please ensure it is uploaded to your GitHub repository.")
